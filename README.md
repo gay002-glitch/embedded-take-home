@@ -395,13 +395,13 @@ We don't expect a perfect implementation. Those who show genuine effort and lear
 
 *Candidates: replace this section with your own short write-up. Keep it to what a teammate would need to trust your implementation.*
 
-- **Fusion approach.** How do you weight GPS vs wheel odometry? Does the weighting change over time or with signal quality?
-- **Heading.** Where does your heading (and its rate of change) come from? What did you assume about the path, and what would break your approach?
-- **Noise handling.** What did you detect, how, and what happens when you detect it? Which noise can't be detected, and how do you know it is affecting your estimate without correction?
-- **Monitoring output.** What thresholds did you choose for staleness warnings and why?
-- **Ambiguity.** What did the task leave underspecified, and what call did you make?
-- **Testing.** How did you verify it was actually working correctly, not just running? What did you check with `--visualize`?
-- **Stretch goals.** Which did you attempt, and how far did you get?
+- **Fusion approach.** I took the value of 0.06m/min as the drift value of wheels, and this adds up with time, so my formula takes this into account and the weight of the wheel continues to reduce as time goes as the drift of the wheel builds up. Mathmatically, I compared the error value of the GPS which is 0.3, with the wheel drift at a particular time.
+- **Heading.** I go the headings mainly from the data from the GPS. However, only after two data of GPS, which requires two seconds can the heading be changed, so there might be inaccuracy due to this. I assum that the path is constructed by many small section of lines and the headings are renewed by every one second. so the components of the actual route consists of the heading and the distance traveled by the wheel data.
+- **Noise handling.**  I used delta value=0 to detect a duplication, I let the program to directly jump to the next message to get rid of its impact. The noise that drops a data value cannot be detected, but the gradually increasing drift of wheel data is probably due to this.
+- **Monitoring output.** I did not implement explicit staleness warning thresholds. Instead, I print the time since the most recent wheel and GPS messages once per second so that stale data can be observed directly. If I extended the implementation, I would add explicit warning thresholds based on those expected update rates.
+- **Ambiguity.** The largest ambiguity is the headings, which I think I did it above. The main point is that I added the last_x and last_y of GPS to compare with the latest message to use math.atan2 to calculate the heading.
+- **Testing.** How did you verify it was actually working correctly, not just running? What did you check with `--visualize`? I tested for a long time and find that the actual position shown is roughly following the circle designed even after a long time. On visualize I check with the error of my odom and the GPS, and find that my error gradually fits to the GPS error.
+- **Stretch goals.** Stretch B: I tried to set up the weight of the GPS by my math knowledge, which I explained the theory in the fusion approach.
 
 ---
 
