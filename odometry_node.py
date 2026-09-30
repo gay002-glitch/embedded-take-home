@@ -70,7 +70,6 @@ class OdometryNode(Node):
         # Subscribers
         # ------------------------------------------------------------------
         # TODO: Create a subscriber for /wheel_ticks.
-        #
         # IMPORTANT: Check what QoS the encoder publisher uses (see
         # sim/encoder_publisher.py). A mismatch means you will receive
         # zero messages — with no error or warning, just silence.
@@ -79,29 +78,40 @@ class OdometryNode(Node):
         # Hint: the QoS profile you need looks like:
         #   QoSProfile(reliability=ReliabilityPolicy.???, depth=10)
         #
-        # self.tick_sub = self.create_subscription(
-        #     WheelTicks, "/wheel_ticks", self.wheel_tick_callback, ???
-        # )
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT, #Best effort gained from encoder_publisher, and structure gaiend from encoder_publisher line 80
+            durability=DurabilityPolicy.VOLATILE,
+            depth=10,
+        )
+        #create tick_subscriber
+        self.tick_sub = self.create_subscription(
+            WheelTicks, "/wheel_ticks", self.wheel_tick_callback, qos
+        )
 
         # TODO: Create a subscriber for /gps_estimate (same QoS considerations).
         #
-        # self.gps_sub = self.create_subscription(
-        #     GPSEstimate, "/gps_estimate", self.gps_callback, ???
-        # )
+        qos = QoSProfile(
+                    reliability=ReliabilityPolicy.BEST_EFFORT,#gps_publisher line 71
+                    durability=DurabilityPolicy.VOLATILE,
+                    depth=10,
+                )
+        self.gps_sub = self.create_subscription(
+            GPSEstimate, "/gps_estimate", self.gps_callback, qos
+        )
 
         # ------------------------------------------------------------------
         # Publisher
         # ------------------------------------------------------------------
         # TODO: Create a publisher for /odom.
         #
-        # self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
+        self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
 
         # ------------------------------------------------------------------
         # Timer — 1 Hz monitoring output
         # ------------------------------------------------------------------
         # TODO: Create a timer that calls self.monitoring_callback once per second.
         #
-        # self.monitor_timer = self.create_timer(1.0, self.monitoring_callback)
+        self.monitor_timer = self.create_timer(1.0, self.monitoring_callback)
 
         # ------------------------------------------------------------------
         # State  — add whatever you need
@@ -110,10 +120,14 @@ class OdometryNode(Node):
         self.y: float = 0.0                  # fused position, metres (north)
         self.heading: float = 0.0            # radians. The rover starts facing EAST (0 rad);
                                              # x is east, y is north, counter-clockwise is positive
-
+        #message from class Wheel
         self.last_tick_count: int | None = None
         self.last_tick_time: float | None = None
 
+        #new added
+        self.last_gps_x=0
+        self.last_gps_y=0
+        
         self.last_gps_time: float | None = None
         self.last_wheel_time: float | None = None
 
@@ -161,15 +175,36 @@ class OdometryNode(Node):
         #
         # Suggested approach:
         #   1. Handle first message (initialise last_tick_count / last_tick_time).
+        self.last_wheel_time=time.monotonic()
+        self.wheel_msg_count+=1
+        if self.last_tick_count==None or self.last_tick_time==None:
+            self.last_tick_count=msg.tick_count
+            self.last_tick_time=msg.timestamp
+            
+            #Once initiated, start to get the second one---AI suggestion
+            return
         #   2. Compute delta_ticks = msg.tick_count - self.last_tick_count
-        #   3. Guard against duplicate (delta_ticks == 0 and delta_time ≈ 0).
+        else:
+            delta_tick_count=msg.tick_count-self.last_tick_count
+            delta_tick_time=msg.timestamp-self.last_tick_time
+        #   3. Guard against duplicate (delta_ticks == 0 and delta_time ≈ 0). 
+        #   If this happens, go to next round. Retain the last ticks and delta=0 until it is not 0.
+            if delta_tick_count == 0 or delta_tick_time == 0:
+                return
+            self.last_tick_count=msg.tick_count
+            self.last_tick_time=msg.timestamp
         #   4. Convert ticks to distance: distance = delta_ticks * DIST_PER_TICK
+        self.delta_distance=delta_tick_count * DIST_PER_TICK
+        self.velocity = self.delta_distance / delta_tick_time
         #   5. Update self.x and self.y: the rover moves `distance` in the direction
         #      it is FACING. Ticks tell you how far, not which way. Where does your
         #      heading come from and how does it change? See "Heading is not
         #      measured" in the README before you write this line.
+        self.x+=self.delta_distance*math.cos(self.heading)
+        self.y+=self.delta_distance*math.sin(self.heading)
         #   6. Call self.publish_odometry().
-        pass
+        self.publish_odometry()
+        # print(f"ticks={msg.tick_count}, time={msg.timestamp}") test generated by AI
 
     # -----------------------------------------------------------------------
     # GPS callback
@@ -197,13 +232,22 @@ class OdometryNode(Node):
             (That's Stretch Goal B — but even a fixed weighting is fine here.)
         """
         # TODO: implement
-        #
+        
         # Suggested approach:
-        #   1. Compute a weight w_gps based on msg.covariance (lower cov = higher trust).
+        #   1. Compute a weight w_gps based on msg.covariance (lower cov = higher trust). 
+        #   GPS_sigma=0.3m, wheel_sigma adding 0.001m/s
+        w_gps=1-math.sqrt(msg.covariance)/((time.monotonic() - self.start_time)*0.001+math.sqrt(msg.covariance))#the weight based on time
         #   2. Blend: self.x = (1 - w_gps) * self.x + w_gps * msg.x
         #             self.y = (1 - w_gps) * self.y + w_gps * msg.y
+        self.heading=math.atan2(msg.y-self.last_gps_y,msg.x-self.last_gps_x)
+        self.x = (1 - w_gps) * self.x + w_gps * msg.x
+        self.y = (1 - w_gps) * self.y + w_gps * msg.y
+
+        self.last_gps_x=self.x
+        self.last_gps_y=self.y
         #   3. Update self.last_gps_time = msg.timestamp
-        pass
+        self.last_gps_time=time.monotonic()
+        #print(f"x={msg.x} y={msg.y} timestamp={msg.timestamp} covariance={msg.covariance}") test
 
     # -----------------------------------------------------------------------
     # Odometry publisher
@@ -231,7 +275,18 @@ class OdometryNode(Node):
         Not every field is required — position is the minimum.
         """
         # TODO: implement
-        pass
+        #below is my original thought, and the active one is generated by AI, I learned that here we should first assign msg as a object of class ODOM and then assign actual values
+        # msg=Odometry(time.monotonic()-self.start_time,'odom','base_link',self.x,self.y,0,0,math.sin(self.heading / 2),math.cos(self.heading / 2))
+        msg = Odometry()
+
+        msg.header.stamp = time.time()
+        msg.header.frame_id = "odom"
+        msg.child_frame_id = "base_link"
+        msg.pose.pose.position.x = self.x
+        msg.pose.pose.position.y = self.y
+        
+        self.odom_pub.publish(msg)# this is written by me
+              
 
     # -----------------------------------------------------------------------
     # Monitoring callback  (1 Hz)
@@ -254,8 +309,8 @@ class OdometryNode(Node):
             [odom] pos=(1.23, 0.45)m  enc=0.02s ago @49.8Hz  gps=0.91s ago
         """
         # TODO: implement
-        pass
-
+        print(f"Second since last wheel_tick message: {(time.monotonic()-self.last_wheel_time):.4f}, Second since last gps message: {(time.monotonic()-self.last_gps_time):.4f}, Measured wheel tick receive rate={self.wheel_msg_count/((time.monotonic()-self.start_time)):.4f}, Position:{self.x,self.y}")
+        #using AI to recalculate the estimated receiving rate
 
 # ---------------------------------------------------------------------------
 # Entry point
